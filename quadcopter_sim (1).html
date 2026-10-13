@@ -1,0 +1,221 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Quadcopter: Payload, Wind & Crows</title>
+<style>
+:root{--bg:#87b4e0;--pn:rgba(12,18,28,.8);--fg:#e8eef7;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+:root:not([data-theme="light"]){color-scheme:light dark}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1d3552}}
+:root[data-theme="dark"]{--bg:#1d3552}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);font:12px system-ui,sans-serif;color:var(--fg)}
+#c{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+.p{position:absolute;background:var(--pn);border-radius:10px;padding:8px 10px;backdrop-filter:blur(6px)}
+#ui{top:calc(8px + env(safe-area-inset-top,0px));left:8px;max-width:210px}
+#ui label{display:block;margin:3px 0}#ui select,#ui button{width:100%;margin:1px 0;font-size:12px}
+#tb{top:calc(8px + env(safe-area-inset-top,0px));right:8px}
+#tb table{border-collapse:collapse}#tb td,#tb th{padding:1px 6px;text-align:right}#tb td:first-child{text-align:left;color:#9fb0c6}
+.r{color:#ff6b6b}.b{color:#4fe3ff}
+.bar{display:inline-block;width:14px;height:5px;background:#333;margin-right:2px}.bar i{display:block;height:100%;background:currentColor}
+#st{left:50%;transform:translateX(-50%);bottom:calc(8px + env(safe-area-inset-bottom,0px));white-space:nowrap}
+#sm{top:50%;left:50%;transform:translate(-50%,-50%);display:none;max-height:80vh;overflow:auto;z-index:5}#sm table{border-collapse:collapse}#sm td,#sm th{padding:2px 8px;text-align:right}#sm td:first-child{text-align:left;color:#9fb0c6}#chw{left:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px))}#fd{right:8px;bottom:calc(8px + env(safe-area-inset-bottom,0px));font-size:11px}#fd table{border-collapse:collapse}#fd td,#fd th{padding:0 5px;text-align:right}#fd td:first-child{text-align:left;color:#9fb0c6}#al{top:calc(8px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);text-align:center;font-weight:600;color:#ffb3b3;background:rgba(90,10,10,.85);display:none}
+@media(max-width:700px){#tb{top:auto;bottom:8px;right:8px;font-size:9px}#fd{right:auto;left:8px;font-size:9px}#chw{display:none}#st{display:none}#ui{max-width:150px}#al{top:auto;bottom:260px;font-size:11px}}
+</style></head><body>
+<canvas id="c"></canvas>
+<div class="p" id="ui"><b>Quadcopter Delivery Sim</b>
+<label>Trajectory<select id="traj"><option value="circle">Circle (R=12 m)</option><option value="wp">Waypoints</option><option value="hover">Hover</option></select></label>
+<label>Wind<select id="wind"><option value="mix">Combined</option><option value="gust">Sudden gust (t=10s)</option><option value="const">Constant</option><option value="var">Time-varying</option><option value="turb">Turbulent</option><option value="none">None</option></select></label>
+<label>Payload<select id="pl"><option value="sched">+10/20/30% at 10/20/30 s</option><option value="fix30">Fixed +30%</option><option value="none">None</option></select></label>
+<label>Camera<select id="cm"><option value="0">Follow adaptive</option><option value="1">Follow PID</option><option value="2">Overview</option></select></label>
+<label>Battery<select id="bat"><option value="34000">Long flight (34 kJ, 3+ min)</option><option value="20000">Medium (20 kJ, ~2 min)</option><option value="6000">Weak pack (6 kJ)</option><option value="0">Ideal (no limit)</option></select></label><label>Fault<select id="ft"><option value="none">None</option><option value="motor">Motor 2 loses 20% @20s</option><option value="gps">GPS noise + dropout 25-30s</option></select></label><label><input type="checkbox" id="cr" checked> Crows</label><label><input type="checkbox" id="av" checked> Obstacle avoidance</label>
+<button id="rs">Restart</button><button id="pa">Pause</button><button id="sp">Speed 1x</button><button id="rp">Results / report</button><button id="dl">Download CSV log</button></div>
+<div class="p" id="tb"></div><div class="p" id="fd"></div><div class="p" id="al"></div><div class="p" id="sm"></div><div class="p" id="chw"><select id="gs" style="width:100%;font-size:11px;margin-bottom:3px"></select><canvas id="ch" width="440" height="200" style="display:block;max-width:100%"></canvas></div><div class="p" id="st"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=id=>document.getElementById(id),cl=(v,a,b)=>Math.min(b,Math.max(a,v));
+let seed=7;const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
+const Rn=new THREE.WebGLRenderer({canvas:$('c'),antialias:true});Rn.setPixelRatio(Math.min(devicePixelRatio,2));Rn.shadowMap.enabled=true;
+const S=new THREE.Scene(),cam=new THREE.PerspectiveCamera(55,1,.1,700);
+const sk=document.createElement('canvas');sk.width=2;sk.height=256;{const g=sk.getContext('2d'),gr=g.createLinearGradient(0,0,0,256);gr.addColorStop(0,'#2f6fb5');gr.addColorStop(.6,'#8fc0ea');gr.addColorStop(1,'#e8f1f7');g.fillStyle=gr;g.fillRect(0,0,2,256)}
+S.background=new THREE.CanvasTexture(sk);S.fog=new THREE.Fog(0xcfe2f0,70,300);
+S.add(new THREE.HemisphereLight(0xcfe6ff,0x4a6a3a,.85));
+const sun=new THREE.DirectionalLight(0xfff1d6,1.1);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);{const s=sun.shadow.camera;s.left=s.bottom=-30;s.right=s.top=30;s.far=250}S.add(sun,sun.target);
+const W=new THREE.Group();W.rotation.x=-Math.PI/2;S.add(W); // physics frame: x,y ground, z up
+const Mt=(c,o)=>new THREE.MeshLambertMaterial(Object.assign({color:c},o));
+const add=(geo,mat,x,y,z,p=W,sh=true)=>{const m=new THREE.Mesh(geo,mat);m.position.set(x,y,z);m.castShadow=sh;m.receiveShadow=true;p.add(m);return m};
+const cyl=(a,b,h,s=8)=>new THREE.CylinderGeometry(a,b,h,s).rotateX(Math.PI/2);
+// ---------- environment ----------
+const hgt=(x,y)=>{const k=cl((Math.hypot(x,y)-30)/40,0,1);return k*(4*Math.sin(x*.05)*Math.cos(y*.06)+3*Math.sin(x*.11+y*.07))};
+{const gg=new THREE.PlaneGeometry(500,500,140,140),pa=gg.attributes.position,col=[];
+for(let i=0;i<pa.count;i++){const x=pa.getX(i),y=pa.getY(i),h=hgt(x,y),n=.5+.5*Math.sin(x*.3)*Math.sin(y*.27);pa.setZ(i,h);col.push(.2+.1*n+h*.01,.45+.12*n,.2+.05*n)}
+gg.setAttribute('color',new THREE.Float32BufferAttribute(col,3));gg.computeVertexNormals();const m=new THREE.Mesh(gg,new THREE.MeshLambertMaterial({vertexColors:true}));m.receiveShadow=true;W.add(m)}
+const trees=[];for(let i=0;i<120;i++){const a=rnd()*6.283,d=19+rnd()*90,x=Math.cos(a)*d,y=Math.sin(a)*d,h=3+rnd()*4,T=new THREE.Group();T.position.set(x,y,hgt(x,y));W.add(T);
+add(cyl(.15,.25,h*.4),Mt(0x5a3d25),0,0,h*.2,T);for(let k=0;k<3;k++)add(cyl(0,1.9-k*.4,h*.55),Mt(0x1f5a2a),0,0,h*.4+k*h*.22+h*.2,T);trees.push(T)}
+for(let i=0;i<8;i++){const a=i*.8+.3,d=24+rnd()*12,x=Math.cos(a)*d,y=Math.sin(a)*d,H=new THREE.Group();H.position.set(x,y,hgt(x,y));H.rotation.z=rnd()*3;W.add(H);
+add(new THREE.BoxGeometry(6,5,3.2),Mt(0xe8dcc4),0,0,1.6,H);add(new THREE.ConeGeometry(4.6,2,4).rotateX(Math.PI/2).rotateZ(Math.PI/4),Mt(0xa8442e),0,0,4.2,H)}
+add(new THREE.RingGeometry(11.2,12.8,90),Mt(0xb59a72),0,0,.03,W,false);
+add(cyl(2,2,.1,32),Mt(0x666a70),12,0,.05);add(new THREE.RingGeometry(1.5,1.7,32),Mt(0xffd23f),12,0,.12,W,false);
+const sockG=new THREE.Group();sockG.position.set(17,-4,0);W.add(sockG);add(cyl(.05,.05,5),Mt(0xdddddd),0,0,2.5,sockG);
+const sock=new THREE.Group();sock.position.z=5;sockG.add(sock);add(new THREE.ConeGeometry(.35,2.2,10).rotateZ(-Math.PI/2),Mt(0xff6a1a),1.1,0,0,sock);
+const clouds=[];for(let i=0;i<10;i++){const c=new THREE.Group();c.position.set((rnd()-.5)*320,(rnd()-.5)*320,50+rnd()*25);for(let k=0;k<5;k++)add(new THREE.SphereGeometry(6+rnd()*5,10,8),Mt(0xffffff,{transparent:true,opacity:.85}),k*7-14,rnd()*5,rnd()*3,c,false);W.add(c);clouds.push(c)}
+const NP=300,wpa=new Float32Array(NP*6),wps=[];for(let i=0;i<NP;i++)wps.push([(rnd()-.5)*70,(rnd()-.5)*70,rnd()*22]);
+const wg=new THREE.BufferGeometry();wg.setAttribute('position',new THREE.BufferAttribute(wpa,3));const wl=new THREE.LineSegments(wg,new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:.55}));wl.frustumCulled=false;W.add(wl);
+const refM=add(new THREE.SphereGeometry(.18,10,8),Mt(0xffe14d,{emissive:0xffcc00}),0,0,0,W,false);
+// ---------- params ----------
+const G=9.81,M0=1.2,L=.23,KC=.016,TMAX=7,I0=[.012,.012,.022],PO=[.12,.08];
+const KP=[3.2,3.2,7],KD=[3.6,3.6,5],KI=[.5,.5,1.5],KAP=[80,80,16],KAD=[16,16,7],KAI=[25,25,0];
+const lab=(t,c)=>{const cv=document.createElement('canvas');cv.width=256;cv.height=64;const x=cv.getContext('2d');x.font='bold 34px sans-serif';x.textAlign='center';x.fillStyle=c;x.strokeStyle='#000';x.lineWidth=5;x.strokeText(t,128,44);x.fillText(t,128,44);const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),depthTest:false}));s.scale.set(1.8,.45,1);s.position.z=.6;return s};
+const cfg={crows:true,avoid:true,cap:34000,fs:true,fault:'none'};let crows=[];
+// ---------- quadcopter: 6-DoF Newton-Euler + cascaded controller ----------
+class Quad{
+constructor(name,col,ad){this.ad=ad;this.col=col;const g=this.g=new THREE.Group();g.rotation.order='ZYX';W.add(g);
+add(new THREE.BoxGeometry(.22,.22,.07),Mt(0x222831),0,0,0,g);add(new THREE.BoxGeometry(.12,.12,.03),Mt(col,{emissive:col,emissiveIntensity:.7}),0,0,.05,g);
+this.rot=[[1,0],[0,1],[-1,0],[0,-1]].map(([x,y])=>{add(new THREE.BoxGeometry(x?L:.025,y?L:.025,.02),Mt(0x333333),x*L/2,y*L/2,0,g);
+const r=new THREE.Group();r.position.set(x*L,y*L,.04);g.add(r);add(new THREE.BoxGeometry(.28,.02,.006),Mt(0x111111),0,0,0,r,false);add(cyl(.14,.14,.004,20),Mt(col,{transparent:true,opacity:.18}),0,0,0,r,false);return r});
+this.crate=new THREE.Group();g.add(this.crate);add(new THREE.BoxGeometry(1,1,1),Mt(0xb98a52),0,0,0,this.crate);add(new THREE.BoxGeometry(1.02,.18,1.02),Mt(0xe9d9a8),0,0,0,this.crate,false);
+g.add(lab(name,'#'+col.toString(16).padStart(6,'0')));
+this.tr=new THREE.Line(new THREE.BufferGeometry(),new THREE.LineBasicMaterial({color:col}));this.trp=new Float32Array(1500);this.tr.geometry.setAttribute('position',new THREE.BufferAttribute(this.trp,3));this.tr.frustumCulled=false;W.add(this.tr);this.reset()}
+reset(){Object.assign(this,{p:[12,0,.15],v:[0,0,0],e:[0,0,0],w:[0,0,0],T:[0,0,0,0],mh:M0,iP:[0,0,0],iA:[0,0,0],dh:[0,0,0],dq:[0,0,0],lA:[0,0,-G],lAl:[0,0,0],aT:[0,0,0],aL:[0,0,0],
+n:0,ss:0,mx:0,mt:0,J:0,ef:0,err:0,st:0,cool:0,tn:0,rel:false,sat:0,sg:[],sa:0,dist:0,tfs:null,tend:null,used:0,soc:1,vr:1,TM:TMAX,mode:'fly',rf:null,lx:[12,0],dead:null,eff:[1,1,1,1],pm:[12,0,.15]});this.trp.fill(0);this.tr.geometry.setDrawRange(0,0)}
+sense(t,c,dt){const n=()=>Math.sqrt(-2*Math.log(Math.random()+1e-9))*Math.cos(6.283*Math.random());
+if(c.fault=='gps'){if(!(t>25&&t<30))this.pm=this.p.map(x=>x+.08*n());else this.pm=this.pm.map((x,i)=>x+(this.v[i]+[.3,-.2,0][i])*dt)}else this.pm=this.p; // GPS: noise + 5 s dropout (dead-reckoning with IMU velocity bias)
+this.eff=c.fault=='motor'&&t>20?[1,.8,1,1]:[1,1,1,1]} // motor 2 loses 20% thrust
+go(m,ref){if(this.mode=='fly')this.rf={p:[...ref.p],v:[...ref.v],a:[0,0,0]};this.lx=this.mode=='rth'?[12,0]:[this.p[0],this.p[1]];this.mode=m}
+fsm(dt,t,c){this.gt=this.err>25?(this.gt||0)+dt:0;this.tt=Math.max(Math.abs(this.e[0]),Math.abs(this.e[1]))>.7?(this.tt||0)+dt:0;if(c.fs&&t>8){if(this.mode=='fly'&&(this.soc<.35||this.gt>3))this.go('rth',c.ref); // low battery OR tracking lost -> return home
+const need=M0*(1+(this.rel?0:c.pl))*G/(4*this.TM);if((this.mode=='fly'||this.mode=='rth')&&(this.soc<.12||need>.7||this.sat>3||this.tt>.3)){this.go('land',c.ref);this.rel=true} // emergency: jettison payload + land
+if(this.mode=='rth'&&Math.hypot(this.p[0]-12,this.p[1])<1.2&&Math.hypot(this.v[0],this.v[1])<1){this.go('land',c.ref);this.rel=true}} // unload at pad
+if(this.mode!='fly'){const rf=this.rf,tg=this.mode=='rth'?[12,0,8]:[this.lx[0],this.lx[1],-.5],wn=.7;
+for(let i=0;i<3;i++){rf.a[i]=wn*wn*(tg[i]-rf.p[i])-2*wn*rf.v[i];rf.v[i]+=rf.a[i]*dt;rf.p[i]+=rf.v[i]*dt}
+if(this.mode=='land'&&this.p[2]<=.16&&Math.hypot(...this.v)<.7)this.dead='LANDED'}}
+bat(dt,c){const P=this.T.reduce((s,x,i)=>s+5*(x*this.eff[i])**1.5,0);this.used+=P*dt;
+if(c.cap>0){this.soc=cl(1-this.used/c.cap,0,1);this.vr=(.72+.28*Math.sqrt(this.soc))*(.55+.45*Math.min(1,this.soc/.03))}else{this.soc=1;this.vr=1}this.TM=TMAX*this.vr*this.vr} // voltage sag lowers max thrust ~V^2
+step(dt,t,c){if(this.dead){if(this.tend==null)this.tend=t;this.T=[0,0,0,0];this.v=[0,0,0];this.w=[0,0,0];return}
+this.dist+=Math.hypot(...this.v)*dt;this.sense(t,c,dt);this.fsm(dt,t,c);c=Object.assign({},c,{pl:this.rel?0:c.pl});if(this.mode!='fly'&&this.tfs==null)this.tfs=t;const ref=this.mode=='fly'?c.ref:this.rf;
+this.ctrl(dt,ref,t);this.dyn(dt,c);this.bat(dt,c);const r=ref.p,e=Math.hypot(r[0]-this.p[0],r[1]-this.p[1],r[2]-this.p[2]);this.err=e;
+if(t>6&&this.mode=='fly'){this.stage(t,c.pl,ref);this.n++;this.sa+=e;this.ss+=e*e;this.mx=Math.max(this.mx,e);this.mt=Math.max(this.mt,Math.abs(this.e[0]),Math.abs(this.e[1]));this.J+=dt*this.T.reduce((s,x)=>s+5*x**1.5,0);this.ef+=dt*this.T.reduce((s,x)=>s+x*x,0)}}
+stage(t,pl,ref){let s=this.sg[this.sg.length-1];if(!s||Math.abs(s.pl-pl)>1e-6){s={pl,t0:t,mz:0,mt:0,rec:null};this.sg.push(s)}
+const ez=Math.abs(ref.p[2]-this.p[2]);s.mz=Math.max(s.mz,ez);s.mt=Math.max(s.mt,Math.abs(this.e[0]),Math.abs(this.e[1]));if(s.rec==null&&s.mz>.1&&ez<.1&&t>s.t0+.3)s.rec=t-s.t0}
+ctrl(dt,ref,t){const ad=this.ad,[ph,th,ps]=this.e;
+if(ad){for(let i=0;i<3;i++){this.dh[i]+=((this.lA[i]-(this.aT[i]-(i==2?G:0)))-this.dh[i])*Math.min(1,dt*8);this.dq[i]+=((this.lAl[i]-this.aL[i])-this.dq[i])*Math.min(1,dt*30)}}
+const mh=ad?this.mh:M0,f=1+1.5*(mh/M0-1),Ih=I0.map(i=>i*f);
+const ep=[0,1,2].map(i=>ref.p[i]-this.pm[i]);
+if(ad&&this.p[2]>1)this.mh=cl(this.mh+dt*.1*(ref.v[2]-this.v[2]+1.5*ep[2])*G,.9*M0,1.7*M0); // mass adaptation law
+const A=[0,1,2].map(i=>{this.iP[i]=cl(this.iP[i]+ep[i]*dt,-4,4);return ref.a[i]+KP[i]*ep[i]+KD[i]*(ref.v[i]-this.v[i])+KI[i]*this.iP[i]-(ad?this.dh[i]:0)});
+const fz=Math.max(3,G+A[2]),ct=Math.max(.5,Math.cos(ph)*Math.cos(th)),Tc=cl(mh*fz/ct,0,4*this.TM*.95),cp=Math.cos(ps),sp=Math.sin(ps);
+const pd=cl((A[0]*sp-A[1]*cp)/fz,-.45,.45),td=cl((A[0]*cp+A[1]*sp)/fz,-.45,.45); // tilt limit 26 deg
+const er=[pd-ph,td-th,-Math.atan2(sp,cp)];this.iA=this.iA.map((v,i)=>cl(v+er[i]*dt,-1.2,1.2));
+const tau=[0,1,2].map(i=>Ih[i]*(KAP[i]*er[i]-KAD[i]*this.w[i]+KAI[i]*this.iA[i]-(ad?this.dq[i]:0)));tau[2]=cl(tau[2],-.05,.05);
+const c=[Tc/4-tau[1]/(2*L)-tau[2]/(4*KC),Tc/4+tau[0]/(2*L)+tau[2]/(4*KC),Tc/4+tau[1]/(2*L)-tau[2]/(4*KC),Tc/4-tau[0]/(2*L)+tau[2]/(4*KC)].map(v=>cl(v,0,this.TM));
+this.sat=Math.max(...c)>=this.TM*.97?this.sat+dt:Math.max(0,this.sat-dt);const k=1-Math.exp(-dt/.04);for(let i=0;i<4;i++)this.T[i]+=(c[i]-this.T[i])*k;this.Ih=Ih;this.mhU=mh}
+dyn(dt,c){const [ph,th,ps]=this.e,[p,q,r]=this.w,cf=Math.cos(ph),sf=Math.sin(ph),ct=Math.max(.2,Math.cos(th)),st=Math.sin(th),cp=Math.cos(ps),sp=Math.sin(ps),T=this.T.map((x,i)=>x*this.eff[i]),Ta=T[0]+T[1]+T[2]+T[3],Ta0=this.T[0]+this.T[1]+this.T[2]+this.T[3];
+const mp=c.pl*M0,m=M0+mp,f=1+1.5*c.pl,I=I0.map(i=>i*f),cgx=PO[0]*mp/m,cgy=PO[1]*mp/m; // payload shifts mass, CoG and inertia
+const tm=[L*(T[1]-T[3]),L*(T[2]-T[0]),KC*(-T[0]+T[1]-T[2]+T[3])],tx=tm[0]-cgy*Ta,ty=tm[1]+cgx*Ta,tz=tm[2];
+const tv=[Ta*(cf*st*cp+sf*sp),Ta*(cf*st*sp-sf*cp),Ta*cf*Math.cos(th)];
+const rel=c.wind.map((w,i)=>w-this.v[i]),sr=Math.hypot(...rel),kd=.05*(1+.3*c.pl),Fd=rel.map(x=>kd*sr*x);
+const ac=[(tv[0]+Fd[0])/m,(tv[1]+Fd[1])/m,(tv[2]+Fd[2])/m-G];
+for(let i=0;i<3;i++){this.v[i]+=ac[i]*dt;this.p[i]+=this.v[i]*dt}
+const al=[(tx+(I[1]-I[2])*q*r-.01*p)/I[0],(ty+(I[2]-I[0])*p*r-.01*q)/I[1],(tz+(I[0]-I[1])*p*q-.01*r)/I[2]];
+for(let i=0;i<3;i++)this.w[i]+=al[i]*dt;
+const tn=st/ct;this.e[0]+=(this.w[0]+(this.w[1]*sf+this.w[2]*cf)*tn)*dt;this.e[1]+=(this.w[1]*cf-this.w[2]*sf)*dt;this.e[2]+=((this.w[1]*sf+this.w[2]*cf)/ct)*dt;
+this.lA=ac;this.lAl=al;const mh=this.mhU||M0;this.aT=tv.map(x=>x*(Ta>1e-6?Ta0/Ta:1)/mh);const S0=this.T,tn0=[L*(S0[1]-S0[3]),L*(S0[2]-S0[0]),KC*(-S0[0]+S0[1]-S0[2]+S0[3])];const Ih=this.Ih||I0;
+this.aL=[(tn0[0]+(Ih[1]-Ih[2])*q*r)/Ih[0],(tn0[1]+(Ih[2]-Ih[0])*p*r)/Ih[1],(tn0[2]+(Ih[0]-Ih[1])*p*q)/Ih[2]];
+if(this.p[2]<=.15){if(this.v[2]<-2.5)this.dead='CRASHED';this.p[2]=.15;if(this.v[2]<0)this.v[2]=0;if(Ta<m*G*1.02){this.v=[0,0,0];this.e=[0,0,0];this.w=[0,0,0]}}
+this.cool-=dt;if(cfg.crows&&this.cool<=0)for(const cr of crows){const d=this.p.map((x,i)=>x-cr.p[i]),n=Math.hypot(...d);if(n<.6){for(let i=0;i<3;i++)this.v[i]+=d[i]/n*2+cr.v[i]*.3;this.w[0]+=(Math.random()-.5)*6;this.w[1]+=(Math.random()-.5)*6;this.cool=1.5;this.st++;break}}}
+vis(pl,dtf,tk){const g=this.g;g.position.set(...this.p);g.rotation.set(...this.e);this.rot.forEach((r,i)=>r.rotation.z+=Math.sqrt(this.T[i]/TMAX)*50*dtf*(i%2?-1:1));
+this.crate.visible=pl>.001;const s=.1+pl*.6;this.crate.scale.set(s,s,s);this.crate.position.set(PO[0],PO[1],-.06-s/2);
+if(tk){const n=this.tn;if(n<500){this.trp.set(this.p,n*3);this.tn++}else{this.trp.copyWithin(0,3);this.trp.set(this.p,1497)}this.tr.geometry.attributes.position.needsUpdate=true;this.tr.geometry.setDrawRange(0,this.tn)}}}
+const quads=[new Quad('PID',0xff5a5a,false),new Quad('ADAPTIVE',0x4fe3ff,true)];
+// ---------- crows ----------
+class Crow{constructor(i){this.a=8+rnd()*8;this.b=8+rnd()*8;this.cx=rnd()*6-3;this.cy=rnd()*6-3;this.w=(.2+rnd()*.15)*(i%2?1:-1);this.ph=rnd()*6.28;this.z=6+rnd()*4;this.p=[0,0,8];this.v=[0,0,0];
+const g=this.g=new THREE.Group(),k=Mt(0x0b0b0e,{emissive:0x14141c});g.rotation.order='ZYX';g.scale.setScalar(1.5);W.add(g);
+add(new THREE.SphereGeometry(1,10,8).scale(.22,.09,.09),k,0,0,0,g);add(new THREE.SphereGeometry(.07,8,8),k,.22,0,.03,g);add(new THREE.ConeGeometry(.03,.12,6).rotateZ(-Math.PI/2),Mt(0x444444),.32,0,.02,g);add(new THREE.BoxGeometry(.16,.09,.01),k,-.28,0,0,g);
+this.wg=[1,-1].map(s=>{const w=new THREE.Group();g.add(w);add(new THREE.BoxGeometry(.16,.5,.012),k,0,s*.25,0,w);return w})}
+f(t){return[this.cx+this.a*Math.cos(this.w*t+this.ph),this.cy+this.b*Math.sin(this.w*t+this.ph),this.z+1.8*Math.sin(.9*t+this.ph)]}
+upd(t){this.p=this.f(t);const q=this.f(t+.05);this.v=q.map((x,i)=>(x-this.p[i])/.05)}
+vis(tt){this.g.visible=cfg.crows;this.g.position.set(...this.p);this.g.rotation.z=Math.atan2(this.v[1],this.v[0]);this.g.rotation.y=-Math.atan2(this.v[2],Math.hypot(this.v[0],this.v[1]));const f=.7*Math.sin(tt*16+this.ph);this.wg[0].rotation.x=f;this.wg[1].rotation.x=-f}}
+for(let i=0;i<6;i++)crows.push(new Crow(i));
+// ---------- wind, payload, reference ----------
+let csv=[],finished=false,rep=false,ou=[0,0,0],t=0,offF=[0,0,0],hist=[],wCur=[0,0,0],plCur=0;
+const randn=()=>Math.sqrt(-2*Math.log(Math.random()+1e-9))*Math.cos(6.283*Math.random());
+function wind(t,m){const gu=(t0,A,d)=>t>t0&&t<t0+d?A*.5*(1-Math.cos(2*Math.PI*(t-t0)/d)):0;let w=[0,0,0];
+if(m=='const'||m=='mix'){const s=m=='mix'?.6:1;w[0]+=5*s;w[1]+=2*s}
+if(m=='gust'||m=='mix'){w[0]+=gu(10,9,4)+gu(30,7,5);w[1]+=gu(30,-3,5)}
+if(m=='var'){w=[4+3*Math.sin(.4*t),2*Math.sin(.25*t+1),.6*Math.sin(.7*t)]}
+if(m=='turb'||m=='mix'){const s=m=='mix'?.5:1;w=w.map((a,i)=>a+ou[i]*s+(m=='turb'?[3,1,0][i]:0))}return w}
+const payload=(t,m)=>m=='fix30'?.3:m=='none'?0:t<10?0:t<20?.1:t<30?.2:t<52?.3:0;
+const rs={p:[12,0,.15],v:[0,0,0],a:[0,0,0]},WP=[[12,0,8],[0,14,10],[-14,0,7],[0,-14,10],[12,0,8]];
+function refStep(dt,t,m){const z0=8,h=Math.min(1,t/5),s=3*h*h-2*h*h*h,ru=t<5;
+if(m=='wp'){const w=WP[t<5?0:1+Math.floor((t-5)/9)%4],wn=.9;for(let i=0;i<3;i++){rs.a[i]=wn*wn*(w[i]-rs.p[i])-2*wn*rs.v[i];rs.v[i]+=rs.a[i]*dt;rs.p[i]+=rs.v[i]*dt}return rs}
+const rz=z0*s,vz=ru?z0*(6*h-6*h*h)/5:0,az=ru?z0*(6-12*h)/25:0;
+if(m=='hover')return{p:[12,0,rz],v:[0,0,vz],a:[0,0,az]};
+const R=12,w=.25,tau=Math.max(0,t-5),ex=Math.exp(-tau/3),th=w*(tau-3*(1-ex)),td=w*(1-ex),tdd=tau>0?w/3*ex:0,c=Math.cos(th),si=Math.sin(th);
+return{p:[R*c,R*si,rz],v:[-R*si*td,R*c*td,vz],a:[-R*(c*td*td+si*tdd),R*(-si*td*td+c*tdd),az]}}
+function simStep(h){t+=h;for(let i=0;i<3;i++)ou[i]+=-ou[i]*.8*h+2.8*Math.sqrt(h)*randn();
+const wv=wind(t,$('wind').value),pl=payload(t,$('pl').value);wCur=wv;plCur=pl;crows.forEach(c=>c.upd(t));
+const r=refStep(h,t,$('traj').value);let off=[0,0,0];
+if(cfg.avoid&&cfg.crows)for(const c of crows){const cp=c.p.map((x,i)=>x+c.v[i]*.7),d=r.p.map((x,i)=>x-cp[i]),n=Math.hypot(...d)+1e-6;if(n<9){const k=(9-n)/9*3.5/n;for(let i=0;i<3;i++)off[i]+=d[i]*k}}
+const om=Math.hypot(...off);if(om>4)off=off.map(x=>x*4/om);offF=offF.map((x,i)=>x+(off[i]-x)*(1-Math.exp(-h*1.0)));
+const ref={p:r.p.map((x,i)=>x+offF[i]),v:r.v,a:r.a};if(t>5)ref.p[2]=Math.max(2,ref.p[2]);window.REF=ref;
+quads.forEach(q=>q.step(h,t,{ref,wind:wv,pl,cap:cfg.cap,fs:cfg.fs,fault:cfg.fault}));
+if(Math.floor(t*20)!=Math.floor((t-h)*20)){quads.forEach((q,i)=>csv.push([t.toFixed(2),i?'ADAPTIVE':'PID',...q.p.map(v=>v.toFixed(3)),...ref.p.map(v=>v.toFixed(3)),q.err.toFixed(3),...q.v.map(v=>v.toFixed(3)),...q.lA.map(v=>v.toFixed(3)),(M0*(1+(q.rel?0:pl))).toFixed(3),(q.ad?q.mh:M0).toFixed(3),(q.soc*100).toFixed(1),(16.8*q.vr).toFixed(2),q.TM.toFixed(2),q.dead||q.mode,Math.hypot(...wv).toFixed(2),((q.rel?0:pl)*100).toFixed(0)].join(',')));const blk=q=>[q.err,q.p[2],q.e[0]*57.3,q.e[1]*57.3,q.T.reduce((a,b)=>a+b,0),Math.hypot(...q.v),Math.hypot(...q.lA),q.soc*100,q.ad?q.mh:M0,ref.p[2]-q.p[2]];hist.push([t,Math.hypot(...wv),pl,ref.p[2],...blk(quads[0]),...blk(quads[1])]);if(hist.length>9000)hist.shift()}}
+function reset(){finished=false;rep=false;$('sm').style.display='none';run=true;$('pa').textContent='Pause';csv=[];cfg.cap=+$('bat').value;cfg.fault=$('ft').value;cfg.fs=true;t=0;seed=7;ou=[0,0,0];offF=[0,0,0];hist=[];rs.p=[12,0,.15];rs.v=[0,0,0];rs.a=[0,0,0];quads.forEach(q=>q.reset());window.REF={p:[12,0,.15]}}
+// ---------- HUD ----------
+function hud(){const q=quads,rm=x=>x.n?Math.sqrt(x.ss/x.n):0,bars=x=>x.T.map(v=>`<span class="bar"><i style="width:${cl(v/TMAX*100,0,100)}%"></i></span>`).join('');
+$('tb').innerHTML=`<table><tr><th></th><th class="r">PID</th><th class="b">ADAPTIVE</th></tr>`+[['Error now (m)',x=>x.err.toFixed(2)],['RMSE (m)',x=>rm(x).toFixed(2)],['Max error (m)',x=>x.mx.toFixed(2)],['Max tilt (°)',x=>(x.mt*57.3).toFixed(0)],['Effort ΣT² (k)',x=>(x.ef/1000).toFixed(1)],['Energy (kJ)',x=>(x.J/1000).toFixed(1)],['Mass est (kg)',x=>x.ad?x.mh.toFixed(2):'1.20 fixed'],['Crow strikes',x=>x.st]].map(([n,f])=>`<tr><td>${n}</td><td class="r">${f(q[0])}</td><td class="b">${f(q[1])}</td></tr>`).join('')+`<tr><td>Motors</td><td class="r">${bars(q[0])}</td><td class="b">${bars(q[1])}</td></tr></table><div style="color:#9fb0c6;margin-top:3px">Metrics counted after t=6 s</div>`;
+const pe=x=>x.rel?0:plCur,me=x=>M0*(1+pe(x)),mt=M0*(1+plCur),f2=(a,d=1)=>a.toFixed(d),nm=x=>Math.hypot(...x),V=(x,i)=>f2(x.v[i]),A=(x,i)=>f2(x.lA[i]);
+$('fd').innerHTML='<table><tr><th>FLIGHT DATA</th><th class="r">PID</th><th class="b">ADAPT</th></tr>'+[['Payload on board (%)',x=>f2(pe(x)*100,0)],['Mass true (kg)',x=>f2(me(x),2)],['Mass used (kg)',x=>x.ad?f2(x.mh,2):'1.20 fixed'],['Hover thrust/motor (N)',x=>f2(me(x)*G/4,2)],['Thrust margin (%)',x=>f2((x.TM/(me(x)*G/4)-1)*100,0)],['CoG shift (mm)',x=>f2(Math.hypot(PO[0],PO[1])*pe(x)*M0/me(x)*1000,0)],['Inertia increase (%)',x=>f2(150*pe(x),0)],['Alt error (m)',x=>f2(window.REF.p[2]-x.p[2],2)],['Vx (m/s)',x=>V(x,0)],['Vy (m/s)',x=>V(x,1)],['Vz (m/s)',x=>V(x,2)],['Speed (m/s)',x=>f2(nm(x.v))],['Ax (m/s²)',x=>A(x,0)],['Ay (m/s²)',x=>A(x,1)],['Az (m/s²)',x=>A(x,2)],['|a| (m/s²)',x=>f2(nm(x.lA))],['Battery (%)',x=>Math.round(x.soc*100)],['Voltage (V)',x=>f2(16.8*x.vr)],['Max thrust (N)',x=>f2(x.TM)],['Mode',x=>x.dead||x.mode.toUpperCase()]].map(([n,f])=>`<tr><td>${n}</td><td class="r">${f(q[0])}</td><td class="b">${f(q[1])}</td></tr>`).join('')+'</table>';
+const al=q.filter(x=>x.dead||x.mode!='fly'||x.soc<.3).map(x=>(x.ad?'ADAPTIVE: ':'PID: ')+(x.dead=='CRASHED'?'CRASHED!':x.dead=='LANDED'?'LANDED SAFELY':x.mode=='rth'?'LOW BATTERY - RETURNING HOME':x.mode=='land'?(x.rel?'LANDING - PAYLOAD RELEASED':'LANDING'):'LOW BATTERY'));
+$('al').style.display=al.length?'block':'none';$('al').innerHTML=al.join('<br>');
+const ws=Math.hypot(...wCur),ang=-Math.atan2(wCur[1],wCur[0])*57.3;
+$('st').innerHTML=`t = ${t.toFixed(1)} s &nbsp;|&nbsp; payload +${(plCur*100).toFixed(0)}% (${(M0*(1+plCur)).toFixed(2)} kg) &nbsp;|&nbsp; wind ${ws.toFixed(1)} m/s <span style="display:inline-block;transform:rotate(${ang}deg)">➜</span>`;
+drawChart()}
+const SIG=[['Tracking error |e| (m)',0],['Altitude z (m) vs reference',1],['Altitude error (m)',9],['Roll angle (deg)',2],['Pitch angle (deg)',3],['Total motor thrust (N)',4],['Speed (m/s)',5],['Acceleration |a| (m/s2)',6],['Battery (%)',7],['Mass used by controller (kg)',8]];
+function drawChart(){const gi=+$('gs').value,k=SIG[gi][1],cv=$('ch'),x=cv.getContext('2d'),w=cv.width,h=cv.height,ml=38,mr=6,mt=16,mb=16,T1=Math.max(10,t),D=hist,col=j=>4+j*10+k;
+x.clearRect(0,0,w,h);let lo=1e9,hi=-1e9;D.forEach(a=>{for(const j of[0,1]){lo=Math.min(lo,a[col(j)]);hi=Math.max(hi,a[col(j)])}if(k==1){lo=Math.min(lo,a[3]);hi=Math.max(hi,a[3])}});
+if(!D.length){lo=0;hi=1}if([0,4,5,6].includes(k))lo=Math.min(lo,0);if(hi-lo<1e-3)hi=lo+1;const pd=(hi-lo)*.08;lo-=pd;hi+=pd;
+const X=a=>ml+a/T1*(w-ml-mr),Y=v=>h-mb-(v-lo)/(hi-lo)*(h-mt-mb);
+x.fillStyle='rgba(255,255,255,.14)';x.beginPath();x.moveTo(X(0),h-mb);D.forEach(a=>x.lineTo(X(a[0]),h-mb-a[1]/14*(h-mt-mb)*.5));x.lineTo(X(T1),h-mb);x.fill();
+x.strokeStyle='rgba(255,255,255,.3)';x.fillStyle='#cfd8e6';x.font='9px sans-serif';x.lineWidth=1;x.setLineDash([]);
+for(let i=0;i<=4;i++){const v=lo+(hi-lo)*i/4;x.beginPath();x.moveTo(ml,Y(v));x.lineTo(w-mr,Y(v));x.stroke();x.fillText(v.toFixed(hi-lo<5?2:1),1,Y(v)+3)}
+for(let i=0;i<=5;i++){const tt=T1*i/5;x.fillText(tt.toFixed(0)+'s',X(tt)-8,h-3)}
+let p0=0;D.forEach(a=>{if(Math.abs(a[2]-p0)>1e-6){p0=a[2];x.strokeStyle='#ffd23f';x.setLineDash([3,3]);x.beginPath();x.moveTo(X(a[0]),mt);x.lineTo(X(a[0]),h-mb);x.stroke();x.setLineDash([]);x.fillStyle='#ffd23f';x.fillText('+'+Math.round(a[2]*100)+'%',X(a[0])+2,mt+8)}});
+const ln=(c,i)=>{x.strokeStyle=c;x.lineWidth=1.6;x.beginPath();D.forEach((a,n)=>n?x.lineTo(X(a[0]),Y(a[i])):x.moveTo(X(a[0]),Y(a[i])));x.stroke()};
+if(k==1){x.setLineDash([4,3]);ln('#ffffff',3);x.setLineDash([])}ln('#ff6b6b',col(0));ln('#4fe3ff',col(1));
+x.fillStyle='#e8eef7';x.font='10px sans-serif';x.fillText('red=PID  cyan=ADAPTIVE  grey=wind  yellow=payload step',ml,10)}
+function showRep(){const q=quads,f=(a,d=2)=>a.toFixed(d);
+const rows=[['Flight time (s)',x=>f(x.tend==null?t:x.tend,1)],['Distance flown (m)',x=>f(x.dist,0)],['RMSE (m)',x=>f(x.n?Math.sqrt(x.ss/x.n):0)],['MAE (m)',x=>f(x.n?x.sa/x.n:0)],['Max error (m)',x=>f(x.mx)],['Max tilt (°)',x=>f(x.mt*57.3,0)],['Energy used (kJ)',x=>f(x.used/1000,1)],['Battery left (%)',x=>f(x.soc*100,0)],['Failsafe started (s)',x=>x.tfs==null?'-':f(x.tfs,1)],['Crow strikes',x=>x.st],['Final state',x=>x.dead||x.mode.toUpperCase()+' (flying)'],['Distance from pad (m)',x=>f(Math.hypot(x.p[0]-12,x.p[1]),1)]];
+const stg=()=>{const a=q[0].sg,b=q[1].sg,n=Math.max(a.length,b.length);if(!n)return'';const c=s=>s?`dip ${s.mz.toFixed(2)} m · recover ${s.rec!=null?s.rec.toFixed(1)+' s':(s.mz<.1?'none':'-')} · tilt ${(s.mt*57.3).toFixed(0)}°`:'-';
+let h='<br><b>PAYLOAD STEP RESPONSE</b> (altitude dip, time to recover within 10 cm, peak tilt)<table><tr><th></th><th class="r">PID</th><th class="b">ADAPTIVE</th></tr>';
+for(let i=0;i<n;i++){const s=a[i]||b[i];h+=`<tr><td>${i==0?'Start (no payload)':s.pl==0?'Payload released':'Payload +'+Math.round(s.pl*100)+'%'} @${s.t0.toFixed(0)}s</td><td class="r">${c(a[i])}</td><td class="b">${c(b[i])}</td></tr>`}return h+'</table>'};
+$('sm').innerHTML='<b>RESULTS '+(finished?'(flight finished)':'(live snapshot)')+'</b><table><tr><th></th><th class="r">PID</th><th class="b">ADAPTIVE</th></tr>'+rows.map(([n,g])=>`<tr><td>${n}</td><td class="r">${g(q[0])}</td><td class="b">${g(q[1])}</td></tr>`).join('')+'</table>'+stg()+'<div style="color:#9fb0c6;margin-top:4px;max-width:440px">Error metrics count only after t=6 s and only while on mission (not during return/landing). Tap to close.</div>'}
+const CSVH='t,drone,x,y,z,ref_x,ref_y,ref_z,err_m,vx,vy,vz,ax,ay,az,mass_true_kg,mass_used_kg,battery_pct,volt,max_thrust_N,mode,wind_mps,payload_pct';
+// ---------- camera & loop ----------
+let az=-2.3,el=.35,dist=14,drag=null,tgt=new THREE.Vector3(12,.5,0);
+const cv=$('c');cv.onpointerdown=e=>drag=[e.clientX,e.clientY];addEventListener('pointerup',()=>drag=null);
+addEventListener('pointermove',e=>{if(!drag)return;az-=(e.clientX-drag[0])*.006;el=cl(el+(e.clientY-drag[1])*.006,.03,1.45);drag=[e.clientX,e.clientY]});
+cv.onwheel=e=>{dist=cl(dist*(1+e.deltaY*.001),4,90);e.preventDefault()};
+$('cm').onchange=()=>dist=$('cm').value=='2'?55:14;
+let run=true,spd=1,last=performance.now(),acc=0,fc=0;
+function frame(now){const dtf=Math.min(.05,(now-last)/1000);last=now;
+if(run){acc+=dtf*spd;let n=0;while(acc>=1/400&&n<150){simStep(1/400);acc-=1/400;n++}if(n>=150)acc=0}
+fc++;const tk=fc%3==0;quads.forEach(q=>q.vis(q.rel?0:plCur,dtf,tk));crows.forEach(c=>c.vis(now/1000));
+refM.position.set(...(window.REF.p));
+const cm=+$('cm').value,tp=cm==2?[0,8,0]:quads[cm].p,tt=new THREE.Vector3(tp[0],tp[2],-tp[1]);tgt.lerp(tt,.12);
+cam.position.set(tgt.x+dist*Math.cos(el)*Math.cos(az),tgt.y+dist*Math.sin(el),tgt.z+dist*Math.cos(el)*Math.sin(az));cam.lookAt(tgt);
+sun.position.set(tgt.x+40,tgt.y+60,tgt.z+25);sun.target.position.copy(tgt);
+const wv=wCur,ws=Math.hypot(...wv);sock.rotation.z=Math.atan2(wv[1],wv[0]);
+trees.forEach((T,i)=>{const s=.01*(1+.5*Math.sin(now/600+i));T.rotation.y=s*wv[0];T.rotation.x=-s*wv[1]});
+clouds.forEach(c=>{c.position.x+=wv[0]*dtf*.3;c.position.y+=wv[1]*dtf*.3;if(c.position.x>170)c.position.x=-170;if(c.position.x<-170)c.position.x=170;if(c.position.y>170)c.position.y=-170;if(c.position.y<-170)c.position.y=170});
+const c0=quads[cm==2?1:cm].p;wl.material.opacity=cl(ws/4,0,.6);
+for(let i=0;i<NP;i++){const s=wps[i];for(let k=0;k<3;k++){s[k]+=wv[k]*dtf*(run?spd:0)}
+
+const bx=c0[0],by=c0[1];if(s[0]-bx>35)s[0]-=70;if(s[0]-bx<-35)s[0]+=70;if(s[1]-by>35)s[1]-=70;if(s[1]-by<-35)s[1]+=70;if(s[2]>22)s[2]-=22;if(s[2]<0)s[2]+=22;
+wpa.set([s[0],s[1],s[2],s[0]-wv[0]*.15,s[1]-wv[1]*.15,s[2]-wv[2]*.15],i*6)}
+wg.attributes.position.needsUpdate=true;
+if(fc%12==0)hud();if(!finished&&quads.every(q=>q.dead)){finished=true;run=false;rep=true;$('pa').textContent='Finished'}if(rep&&fc%12==0)showRep();$('sm').style.display=rep?'block':'none';
+Rn.render(S,cam);requestAnimationFrame(frame)}
+function rsz(){Rn.setSize(innerWidth,innerHeight,false);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()}
+addEventListener('resize',rsz);rsz();
+['traj','wind','pl','bat','ft'].forEach(i=>$(i).onchange=reset);
+$('cr').onchange=e=>cfg.crows=e.target.checked;$('av').onchange=e=>cfg.avoid=e.target.checked;
+$('gs').innerHTML=SIG.map((s,i)=>`<option value="${i}">${s[0]}</option>`).join('');$('gs').onchange=drawChart;$('rp').onclick=()=>{rep=!rep;if(rep)showRep()};$('sm').onclick=()=>{rep=false};$('dl').onclick=()=>{try{const b=new Blob([CSVH+'\n'+csv.join('\n')],{type:'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='quad_flight_log.csv';a.click()}catch(e){}};$('rs').onclick=reset;$('pa').onclick=()=>{run=!run;$('pa').textContent=run?'Pause':'Resume'};
+$('sp').onclick=()=>{spd=spd==1?2:spd==2?4:spd==4?8:1;$('sp').textContent='Speed '+spd+'x'};
+reset();requestAnimationFrame(frame);
+</script></body></html>
